@@ -10,6 +10,24 @@
 * .uncancellable() https://github.com/promises-aplus/cancellation-spec/issues/6
 * Returns the rejection reason if the deferred was canceled normally. If the second, optional "strict" argument is true means it will throw an error if the promise is fulfilled. http://dojotoolkit.org/reference-guide/1.10/dojo/Deferred.html#cancel
 * derived = fulfilledPromise.then(function doSomething(){return childPromise}); derived.cancel(); - derived is cancelled and doSomething is executed, but what about childPromise? (https://github.com/promises-aplus/cancellation-spec/issues/7#issuecomment-17761795)
+* does `finally` wait for "inner" finalizers? Does `cancel()` return a promise?
+* how would promises "nest" `finally`s? with `using` only?
+  	try { … } finally { … }
+  	….finally(…)
+  	… try { … } finally { … }
+  	….then(()=> ….finally(…) )
+  	try { try { … } finally { … } … } finally { … }
+  	….finally(…).….finally(…)
+  	try { … try { … } finally { … } } finally { … }
+  	….then(()=> ….finally(…) ).finally(…)
+  	try { … } finally { return/throw … }
+  	….always(…) ???
+  	try { try { return } finally { … } … } finally { … }
+  	.finally(…).….finally(…).cancel()
+  	fn=()=> try { return } finally { … }; try { fn() … } finally { … }
+  	fn=()=> .finally(); fn.….finally(…) ???
+  	function* x() { try { yield 1; } finally { yield 2; } }
+  	(function*() { try { yield* x(); } finally { …??? }}()).next().return() ??? 
 */
 
 // test snippet for cancellation:
@@ -41,6 +59,7 @@ Promise.run(a.fork({error: function(e) { console.log(e.stacktrace);}}))
   	var x = a.chain(function(){ return x.*inner chain*});
   	var x = a.chain(function(){ return x}).*outer chain*;
   bonus: work with combinators like .map() in the chain
+* http://stackoverflow.com/questions/29198195/whats-the-deal-with-optimising-arguments, http://stackoverflow.com/questions/29151863/whats-an-efficient-way-to-call-a-function-with-variable-arguments
 
 */
 
@@ -155,16 +174,13 @@ Promise.run(a.fork({error: function(e) { console.log(e.stacktrace);}}))
   similar to an .oncancellable() function that takes a callback, but also propagates cancellation attempts
 * memoize-promise: take cancellation into account, and un-cache on cancellation or prevent propagation of cancellation attempts and always fetch
 * short-cut-foldr on parallel collection (like a `find`)
-* idea: when adopting an inner promise, pass your (single, cancellable) subscription immediately to it
-        when having adopted an inner promise, pass new (cancellable) subscriptions immediately to
-        when more subscriptions are registered, *highjack* the already-passed subscription
-        when processing a subscription, mark it as such with the result, so that forking a settled promise can use a quick lookup
-* idea: put a `send` method on subscriptions on their registration, so that the successors don't need to hold a reference to the parent promise
+* idea: put a `onsend` method on subscriptions on their registration, so that the successors don't need to hold a reference to the parent promise
         the parent can decide on its own when to vanish, and what send abilities to provide
 
-* autoclosingpromise calls back with retur value of res.dispose() after first bunch of handlers
+* autoclosingpromise calls back with return value of res.dispose() after first bunch of handlers
 * extends if the convey the same ticket
 * is disposable a comonad?
+* implement toJSON
 */
 
 /* SPEC: Communication
