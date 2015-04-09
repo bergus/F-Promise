@@ -13,8 +13,6 @@
 		<script src="../String.js"></script>
 		<script src="../Number.js"></script>
 		
-		<script src="Promise.js"></script>
-		
 		<script type="text/javascript" id="shim">
 			if (!this.setImmediate)
 				this.setImmediate = function setImmediate(fn) { return setTimeout(fn, 0); };
@@ -23,6 +21,9 @@
 			if (!Object.setPrototypeOf)
 				Object.setPrototypeOf = function(o, p) { o.__proto__ = p; return o; };
 		</script>
+		
+		<script src="Promise.js"></script>
+		<script src="variants.js"></script>
 	</head>
 
 	<body>
