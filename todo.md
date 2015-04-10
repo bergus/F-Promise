@@ -181,6 +181,9 @@ Promise.run(a.fork({error: function(e) { console.log(e.stacktrace);}}))
 * extends if the convey the same ticket
 * is disposable a comonad?
 * implement toJSON
+* a `.force()` method for lazy promises. Or `.execute()`? similar to `.done()`?
+* `.asap()` is considered bad enough not become a method, but require to be written out as `Promise.run(….fork({}))`
+* implement `Promise.join` using a function value in `Promis.all`'s `opt` 
 */
 
 /* SPEC: Communication

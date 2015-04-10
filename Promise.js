@@ -117,7 +117,7 @@ function AdoptingPromise(fn) {
 					handle = {token: null, instruct: [handle], resolution: null};
 				else
 					handle.instruct = [];
-				handle.token = getToken(handle.instruct);
+				Object.defineProperty(handle, "token", {get: makeArrayToken(handle.instruct), enumerable:true, configurable:true});
 			}
 			handle.instruct.push(subscription);
 		}
@@ -160,8 +160,10 @@ function AdoptingPromise(fn) {
 	}
 	// expects `go` to be safe. TODO: Prove correctness. If wrapper is required, possibly unwrap when adopt() is called.
 	var go = fn.call(this, adopt, function progress(event) {
-		var progressHandlers = handlers.filter(function(subscription) { return subscription.progress && !isCancelled(subscription.token); });
-		if (progressHandlers.length <= 1) return progressHandlers[0].progress;
+		if (!handle) return;
+		if (!handle.instruct) return !isCancelled(handle.token) && handle.progress;
+		var progressHandlers = handle.instruct.filter(function(subscription) { return subscription.progress && !isCancelled(subscription.token); });
+		if (progressHandlers.length == 1) return progressHandlers[0].progress;
 		var conts = new ContinuationBuilder();
 		for (var i=0; i<progressHandlers.length; i++)
 			conts.add(Promise.trigger(progressHandlers[i].progress, arguments));
@@ -169,14 +171,10 @@ function AdoptingPromise(fn) {
 	}, function isCancellable(token) {
 		// tests whether there are no (more) CancellationTokens registered with the promise,
 		// and sets the token state accordingly
-		if (token.isCancelled) return true;
-		if (!handlers) return token.isCancelled = true; // TODO: Is it acceptable to revoke the associated token after a promise has been resolved?
-		// remove cancelled subscriptions (whose token has been revoked)
-		for (var i=0, j=0; i<handlers.length; i++)
-			if (!isCancelled(handlers[i].token) && j++!=i)
-				handlers[j] = handlers[i];
-		handlers.length = j;
-		return token.isCancelled = !j;
+		if (isCancelled(token)) return true;
+		if (!handle) return token.isCancelled = true; // TODO: Is it acceptable to revoke the associated token after a promise has been resolved?
+		var tk = handle.token;
+		return token.isCancelled = !tk || isCancelled(tk);
 	});
 	fn = null; // garbage collection
 }
@@ -314,7 +312,7 @@ Promise.prototype.send = function send() {
 };
 
 Promise.prototype.cancel = function cancel(reason, token) {
-	if (this.onsend != Promise.prototype.onsend) // needs to be still pending, with the ability to send messages
+	if (this.onsend == Promise.prototype.onsend) // needs to be still pending, with the ability to send messages
 		return false;
 	if (!(reason && reason instanceof Error && reason.cancelled===true))
 		reason = new CancellationError(reason || "cancelled operation");
@@ -334,16 +332,98 @@ function isCancelled(token) {
 	// it is cancelled when token exists, and .isCancelled yields true
 	return !!token && (token.isCancelled === true || (token.isCancelled !== false && token.isCancelled()));
 }
-function getToken(subscriptions) {
-	return {
-		isCancelled: function() {
-			for (var i=0; i<subscriptions.length; i++)
-				if (!isCancelled(subscriptions[i].token))
-					return false;
-			return true;
+function makeArrayToken(handlers) {
+	return function tokenGetter() {
+		var uncancelledTokens = 0;
+		// remove cancelled subscriptions (whose token has been revoked)
+		for (var i=0, j=0; i<handlers.length; i++) {
+			var token = handlers[i].token;
+			if (!isCancelled(token)) { // no noken, or not cancelled
+				if (token) uncancelledTokens++;
+				if (j++!=i) handlers[j] = handlers[i]; // overwrites cancelled token if necessary
+			}
 		}
+		handlers.length = j;
+		return !uncancelledTokens
+		 ?	null // no token
+		 :	{ // an uncancelled token
+				isCancelled: false // holds at least as long as the handlers are the "same". Is a (handlers.length == j) test necessary?
+			};
 	};
 }
+
+Promise.prototype.cancellable = function(onCancel) {
+	// returns new promise, registers instruct token
+	if (typeof onCancel != "function") console.warn("Promise::cancellable: you must pass a callback function, instead of "+typeof onCancel);
+	var promise = this;
+	return new AdoptingPromise(function cancellableResolver(adopt, progress, isCancellable) {
+		var token = {isCancelled: false};
+		this.onsend = function mapSend(msg, error) {
+			if (msg != "cancel") return promise.onsend;
+			if (isCancellable(token))
+				var cont = adopt(Promise.reject(error));
+				onCancel(error);
+				return new ContinuationBuilder([
+					Promise.trigger(promise.onsend, arguments),
+					cont
+				]).get();
+		};
+		return promise.fork({
+			proceed: adopt,
+			progress: progress,
+			token: token
+		});
+	});
+};
+Promise.prototype.uncancellable = function(onCancelAttempt) {
+	// returns new promise, registers instruct token
+	var promise = this;
+	return new AdoptingPromise(function uncancellableResolver(adopt, progress, isCancellable) {
+		this.onsend = function mapSend(msg, error) {
+			if (msg != "cancel") return promise.onsend;
+			// isCancellable({}) TODO: remove cancelled handlers
+			if (onCancelAttempt != null)
+				onCancelAttempt(error);
+			// return undefined - does not reject anything, does not propagate cancellation.
+		};
+		return promise.fork({
+			proceed: adopt,
+			progress: progress,
+			token: {isCancelled: false}
+		});
+	});
+}
+Promise.prototype.finally = function(finalisation) {
+	// returns new promise, registers instruct token
+	if (typeof finalisation != "function") console.warn("Promise::finally: you must pass a callback function, instead of "+typeof onCancel);
+	var promise = this;
+	return new AdoptingPromise(function finalisationResolver(adopt, progress, isCancellable) {
+		var token = {isCancelled: false};
+		this.onsend = function mapSend(msg, error) {
+			if (msg != "cancel") return promise.onsend;
+			if (isCancellable(token))
+				var cont2 = adopt(Promise.reject(error)),
+				    cont1 = Promise.trigger(promise.onsend, arguments);
+				try {
+					finalisation(promise);
+				} finally {
+					return new ContinuationBuilder([cont1, cont2]).get();
+				}
+		};
+		return promise.fork({
+			proceed: function(p) {
+				var cont = adopt(p);
+				try {
+					finalisation(promise)
+				} finally {
+					return cont;
+				}
+			},
+			progress: progress,
+			token: token
+		});
+	});
+};
 
 function makeUnitFunction(constructor) {
 	return function of(val) {
@@ -374,9 +454,9 @@ function makeMapping(createSubscription, build) {
 				if (msg != "cancel") return promise.onsend;
 				if (isCancellable(token))
 					return new ContinuationBuilder([
-						Promise.trigger(promise.onsend, arguments),
-						adopt(Promise.reject(error))
-					]).get();
+						adopt(Promise.reject(error)),
+						Promise.trigger(promise.onsend, arguments)
+					].reverse()).get();
 			};
 			return promise.fork(createSubscription(function mapper() {
 				return adopt(build(fn.apply(this, arguments)));
@@ -404,9 +484,9 @@ function makeChaining(execute) {
 					if (!promise) // there currently is no dependency, store for later
 						cancellation = error; // new CancellationError("aim already cancelled") ???
 					return new ContinuationBuilder([
-						promise && Promise.trigger(promise.onsend, arguments),
-						adopt(Promise.reject(error))
-					]).get();
+						adopt(Promise.reject(error)),
+						promise && Promise.trigger(promise.onsend, arguments)
+					].reverse()).get();
 				}
 			};
 			function makeChainer(fn) {
@@ -491,19 +571,34 @@ Promise.prototype.catch = function catch_(onrejected) {
 	if (typeof onrejected != "function") console.warn("Promise::catch: You must pass a function, instead of", onrejected);
 	if (arguments.length <= 1)
 		return this.then(null, onrejected);
-	var tohandle = onrejected,
-	    promise = this;
-	onrejected = arguments[1];
-	return this.chainStrict(null, Promise.method( isErrorClass(tohandle)
-	  ? function(err) {
-	    	if (err instanceof tohandle) return onrejected.call(this, arguments);
-	    	else return promise;
-	    }
-	  : function(err) {
-	    	if (tohandle(err)) return onrejected.call(this, arguments);
-	    	else return promise;
-	    }
-	));
+	if (arguments.length == 2) {
+		var tohandle = onrejected,
+		    promise = this;
+		onrejected = arguments[1];
+		return this.chainStrict(null, Promise.method( isErrorClass(tohandle)
+		  ?	function(err) {
+				if (err instanceof tohandle) return onrejected.call(this, arguments);
+				else return promise;
+			}
+		 :	function(err) {
+				if (tohandle(err)) return onrejected.call(this, arguments);
+				else return promise;
+			}
+		));
+	} else {
+		var args = arguments;
+		return this.chainStrict(null, Promise.method(function(err) {
+			for (var i=0; i<args.length; ) {
+				var tohandle = args[i++];
+				if (i==args.length) // odd number of args, last is a catch-all
+					return tohandle.call(this, arguments);
+				var onrejected = args[i++];
+				if (isErrorClass(tohandle) ? err instanceof tohandle : tohandle(err))
+					return onrejected.call(this, arguments);
+			}
+			return promise;
+		}));
+	} 
 };
 function isErrorClass(constructor) {
 	if (constructor.prototype instanceof Error) return true; // premature optimisation
@@ -568,8 +663,11 @@ Promise.all = function all(promises, opt) {
 			return continuations;
 		}
 		this.onsend = function allSend(msg, error) {
-			if (msg != "cancel" || isCancellable(token))
+			if (msg != "cancel")
 				return notifyRest(arguments).get();
+			else if (isCancellable(token))
+				var cont = adopt(Promise.reject(error));
+				return notifyRest(arguments).add(cont).get();
 		};
 		return new ContinuationBuilder(promises.map(function(promise, i) {
 			return promise.fork({
@@ -592,8 +690,8 @@ Promise.all = function all(promises, opt) {
 				proceed: function(/*promise*/) {
 					waiting[i] = null;
 					token.isCancelled = true; // revoke
-					Promise.run(notifyRest(["cancel", new CancellationError("aim already rejected")])); // TODO: return continuation
-					return adopt(promise);
+					var cont = adopt(promise);
+					return notifyRest(["cancel", new CancellationError("aim already rejected")]).add(cont).get();
 				},
 				progress: progress,
 				token: waiting[i] = token
@@ -610,18 +708,21 @@ Promise.race = function(promises) {
 			for (var j=0; j<length; j++)
 				if (i != j)
 					continuations.add(Promise.trigger(promises[j].onsend, args));
-			return continuations.get();
+			return continuations;
 		}
 		this.onsend = function raceSend(msg, error) {
-			if (msg != "cancel" || isCancellable(token))
-				return notifyExcept(-1, arguments);
+			if (msg != "cancel")
+				return notifyRest(-1, arguments).get();
+			else if (isCancellable(token))
+				var cont = adopt(Promise.reject(error));
+				return notifyRest(-1, arguments).add(cont).get();
 		};
 		return new ContinuationBuilder(promises.map(function(promise, i) {
 			return promise.fork({
 				proceed: function raceWinner(/*promise*/) {
 					token.isCancelled = true; // revoke
-					Promise.run(notifyExcept(i, ["cancel", new CancellationError("aim already resolved")])); // TODO: return continuation
-					return adopt(promise);
+					var cont = adopt(promise);
+					return notifyExcept(i, ["cancel", new CancellationError("aim already resolved")]).add(cont).get();
 				},
 				progress: progress,
 				token: token

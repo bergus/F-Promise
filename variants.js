@@ -34,9 +34,9 @@ var config = {
 	},
 	lazy: function(caller) {
 		return function lazyCaller(fn, that, fulfill, reject, progress, isCancellable) {
-			return function lazyCall() { // a continuation
+			return ContinuationBuilder.safe(function lazyCall() { // a continuation
 				caller(fn, that, fulfill, reject, progress, isCancellable);
-			};
+			});
 		};
 	},
 	strict: function(caller) {
@@ -45,21 +45,31 @@ var config = {
 			// doesn't return the result
 		};
 	},
-	cancellable: function(caller) {
+	cancellable: function(caller, token) {
 		return function(fn, that, fulfill, reject, progress, isCancellable) {
 			var cancel = caller(fn, that, fulfill, reject, progress);
 			if (typeof cancel != "function") return;
-			var token = {cancellable:false};
 			that.onsend = function send(msg, error) {
 				if (msg != "cancel" || !isCancellable(token)) return;
 				try {
 					cancel(error);
 				} finally {
 					cancel = null;
-					reject(error);
-					// return reject continuation???
+					reject(error); // return reject continuation???
 				}
 			};
+		};
+	},
+	lazyCancellable: function(caller) {
+		var token = {isCancelled:false};
+		caller = this.lazy(this.cancellable(caller, token));
+		return function(fn, that, fulfill, reject, progress, isCancellable) {
+			that.onsend = function send(msg, error) {
+				if (msg != "cancel" || !isCancellable(token)) return;
+				// the adopt call is expected to kill the waiting lazy continuation (buggy???)
+				reject(error); // return reject continuation???
+			};
+			return caller(fn, that, fulfill, reject, progress, isCancellable);
 		};
 	}
 };
@@ -85,11 +95,9 @@ function id() {
 function makeConstructor(safe, lazy, async, cancellable) {
 	var caller = safe ? config.safe : config.unsafe;
 	if (cancellable)
-		caller = config.cancellable(caller);
-	if (lazy)
-		caller = config.lazy(caller);
-	else if (!cancellable)
-		caller = config.strict(caller);
+		caller = lazy ? config.lazyCancellable(caller) : config.cancellable(caller, {isCancelled:false});
+	else
+		caller = lazy ? config.lazy(caller) : config.strict(caller);
 	return makePromiseConstructor(caller, async ? config.async : config.sync);
 }
 var combinations = [["safe", "unsafe"], ["lazy", "strict"]],
@@ -121,6 +129,7 @@ for (var i=0; i<constructors.length; i++) {
 	for (var j=0; j<combinations.length; j++) {
 		var prop = combinations[j][i>>j & 1];
 		constructors[i ^ 1<<j][prop] = c;
+		c["_"+combinations[j][0]] = !(i & 1<<j);
 		c[prop] = c; // can't be bad if one can state a property explicitly
 	}
 }
