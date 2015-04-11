@@ -104,7 +104,7 @@ function AdoptingPromise(fn) {
 			handle = subscription;
 		else if (handle.resolution && handle.resolution != that) { // expected to never happen
 			var cont = handle.resolution.fork(subscription);
-			if (this instanceof AdoptingPromise && this.fork == forkAdopting) {
+			if (this instanceof Promise && this.fork == forkAdopting) {
 				this.fork = handle.resolution.fork; // employ shortcut, empower garbage collection
 				this.onsend = handle.resolution.onsend;
 			}
@@ -179,33 +179,17 @@ function AdoptingPromise(fn) {
 	fn = null; // garbage collection
 }
 
-function Promise(fn) {
-	AdoptingPromise.call(this, function callResolver(adopt, progress) {
-		function makeResolver(constructor) {
-		// creates a fulfill/reject resolver with methods to actually execute the continuations they might return
-			function resolve() {
-				return adopt(new constructor(arguments));
-			}
-			resolve.sync = function resolveSync() {
-				Promise.run(adopt(new constructor(arguments)));
-			};
-			resolve.async = function resolveAsync() {
-				var cont = adopt(new constructor(arguments)); // this creates the continuation immediately
-				setImmediate(function runAsyncResolution() {
-					Promise.run(cont);
-				});
-			};
-			return resolve;
-		}
-		// TODO: make a resolver that also accepts promises, not only plain fulfillment values
-		return ContinuationBuilder.safe(fn.call(this, makeResolver(FulfilledPromise), makeResolver(RejectedPromise), function triggerProgress() {
-			Promise.run(Promise.trigger(progress, arguments));
-		}));
-	});
-	fn = null; // garbage collection
-}
+FulfilledPromise.prototype = RejectedPromise.prototype = AdoptingPromise.prototype;
+var Promise = AdoptingPromise;
 
-FulfilledPromise.prototype = RejectedPromise.prototype = AdoptingPromise.prototype = Promise.prototype;
+Promise.prototype.create = function createAdopt(fn) {
+// instantiates a new Promise object of the same subclass as the current instance,
+// using the AdoptingPromise constructor
+	// TODO: optimisation
+	var o = Object.create(Object.getPrototypeOf(this));
+	AdoptingPromise.call(o, fn);
+	return o;
+};
 
 Promise.run = function run(cont) {
 	while (typeof cont == "function")
@@ -356,7 +340,7 @@ Promise.prototype.cancellable = function(onCancel) {
 	// returns new promise, registers instruct token
 	if (typeof onCancel != "function") console.warn("Promise::cancellable: you must pass a callback function, instead of "+typeof onCancel);
 	var promise = this;
-	return new AdoptingPromise(function cancellableResolver(adopt, progress, isCancellable) {
+	return this.create(function cancellableResolver(adopt, progress, isCancellable) {
 		var token = {isCancelled: false};
 		this.onsend = function mapSend(msg, error) {
 			if (msg != "cancel") return promise.onsend;
@@ -374,7 +358,7 @@ Promise.prototype.cancellable = function(onCancel) {
 Promise.prototype.uncancellable = function(onCancelAttempt) {
 	// returns new promise, registers instruct token
 	var promise = this;
-	return new AdoptingPromise(function uncancellableResolver(adopt, progress, isCancellable) {
+	return this.create(function uncancellableResolver(adopt, progress, isCancellable) {
 		this.onsend = function mapSend(msg, error) {
 			if (msg != "cancel") return promise.onsend;
 			// isCancellable({}) TODO: remove cancelled handlers
@@ -389,7 +373,7 @@ Promise.prototype.finally = function(finalisation) {
 	// returns new promise, registers instruct token
 	if (typeof finalisation != "function") console.warn("Promise::finally: you must pass a callback function, instead of "+typeof onCancel);
 	var promise = this;
-	return new AdoptingPromise(function finalisationResolver(adopt, progress, isCancellable) {
+	return this.create(function finalisationResolver(adopt, progress, isCancellable) {
 		var token = {isCancelled: false};
 		this.onsend = function mapSend(msg, error) {
 			if (!promise) return;
@@ -444,7 +428,7 @@ Promise.reject = makeUnitFunction(RejectedPromise);
 function makeMapping(createSubscription, build) {
 	return function map(fn) {
 		var promise = this;
-		return new AdoptingPromise(function mapResolver(adopt, progress, isCancellable) {
+		return this.create(function mapResolver(adopt, progress, isCancellable) { // TODO: respect subclass settings
 			var token = {isCancelled: false};
 			this.onsend = function mapSend(msg, error) {
 				if (msg != "cancel") return promise.onsend;
@@ -470,7 +454,7 @@ Promise.prototype.mapError = makeMapping(function(m, s) { s.error   = m; return 
 function makeChaining(execute) {
 	return function chain(onfulfilled, onrejected, explicitToken) {
 		var promise = this;
-		return new AdoptingPromise(function chainResolver(adopt, progress, isCancellable) {
+		return this.create(function chainResolver(adopt, progress, isCancellable) { // TODO: respect subclass settings
 			var cancellation = null,
 			    token = explicitToken || {isCancelled: false},
 			    strict = false, done;
@@ -523,11 +507,12 @@ Promise.method = function makeThenHandler(fn, warn) {
 		if (warn && fn != null) console.warn(warn + ": You must pass a function callback or null, instead of", fn);
 		return null;
 	}
+	// var Promise = this; TODO subclassing???
 	return function thenableResolvingHandler() {
 		// get a value from the fn, and apply https://github.com/promises-aplus/promises-spec#the-promise-resolution-procedure
 		try {
 			var v = fn.apply(this, arguments);
-			if (v instanceof AdoptingPromise) return v; // A+ 2.3.2 "If x is a promise, adopt its state"
+			if (v instanceof Promise) return v; // A+ 2.3.2 "If x is a promise, adopt its state"
 			// if (v === undefined) console.warn("Promise::then: callback did not return a result value")
 			if (Object(v) !== v) return Promise.of(v); // A+ 2.3.4 "If x is not an object or function, fulfill promise with x."
 			var then = v.then; // A+ 2.3.3.1 (Note: "avoid multiple accesses to the .then property")
@@ -536,12 +521,12 @@ Promise.method = function makeThenHandler(fn, warn) {
 		}
 		if (typeof then != "function") // A+ 2.3.3.4 "If then is not a function, fulfill promise with x"
 			return Promise.of(v);
-		return new Promise(function thenableResolver(fulfill, reject, progress) {
+		return new Promise.default.unsafe.uncancellable(function thenableResolver(fulfill, reject, progress) {
 			try {
 				// A+ 2.3.3.3 "call then with x as this, first argument resolvePromise, and second argument rejectPromise"
-				then.call(v, fulfill.async, reject.async, progress); // TODO: support cancellation
+				then.call(v, fulfill, reject, progress); // TODO: support cancellation
 			} catch(e) { // A+ 2.3.3.3.4 "If calling then throws an exception e"
-				reject.async(e); // "reject promise with e as the reason (unless already resolved)"
+				reject(e); // "reject promise with e as the reason (unless already resolved)"
 			}
 		}).chain(Promise.resolve); // A+ 2.3.3.3.1 "when resolvePromise is called with a value y, run [[Resolve]](promise, y)" (recursively)
 	};
@@ -552,7 +537,7 @@ Promise.from = Promise.cast = Promise.method(function identity(v) { return v; })
 
 // like Promise.cast/from, but always returns a new promise
 Promise.resolve = Promise.method(function getResolveValue(v) {
-	if (v instanceof AdoptingPromise) return v.chain(); // a new Promise (assimilating v)
+	if (v instanceof Promise) return v.chain(); // a new Promise (assimilating v)
 	return v;
 });
 
@@ -645,7 +630,7 @@ Promise.all = function all(promises, opt) {
 	var spread = opt & 2 || (typeof opt == "function"),
 	    notranspose = opt & 1,
 	    joiner = (typeof opt == "function") && opt;
-	return new AdoptingPromise(function allResolver(adopt, progress, isCancellable) {
+	return this.prototype.create(function allResolver(adopt, progress, isCancellable) {
 		var length = promises.length,
 		    cancellation = null,
 		    token = {isCancelled: false},
@@ -714,11 +699,11 @@ Promise.join = function(joiner) {
 	joiner = arguments[--i];
 	while (i--)
 		args[i] = arguments[i];
-	return Promise.all(args, Promise.method(joiner));
+	return this.all(args, Promise.method(joiner));
 };
 
 Promise.race = function(promises) {
-	return new AdoptingPromise(function raceResolver(adopt, progress, isCancellable) {
+	return this.prototype.create(function raceResolver(adopt, progress, isCancellable) {
 		var token = {isCancelled: false};
 		function notifyExcept(i, args) {
 			var continuations = new ContinuationBuilder();
@@ -749,5 +734,9 @@ Promise.race = function(promises) {
 	});
 };
 
-if (typeof module == "object" && module.exports)
+if (typeof module == "object" && module.exports) {
+	Promise.ContinuationBuilder = ContinuationBuilder;
+	Promise.Fulfilled = FulfilledPromise;
+	Promise.Rejected = RejectedPromise;
 	module.exports = Promise;
+}

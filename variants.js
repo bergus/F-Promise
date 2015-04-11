@@ -1,3 +1,9 @@
+if (typeof module == "object" && module.exports) {
+	var AdoptingPromise = require("./Promise.js");
+	var ContinuationBuilder = AdoptingPromise.ContinuationBuilder,
+	    FulfilledPromise = AdoptingPromise.Fulfilled,
+	    RejectedPromise = AdoptingPromise.Rejected;
+}
 function makePromiseConstructor(call, makeResolver) {
 	// makeResolver creates a fulfill/reject resolver with methods to actually execute the continuations they might return
 	function Promise(fn) {
@@ -80,6 +86,9 @@ var ContinuationPromise = makePromiseConstructor(ContinuationBuilder.safe, funct
 		return adopt(new constructor(arguments));
 	};
 });
+function ES6Promise(fn) {
+	return new Promise.strict.async.safe.uncancellable(fn).chain(Promise.resolve); // TODO: lazy chain
+}
 
 function makeCreator(proto) {
 	return function as() {
@@ -136,8 +145,9 @@ for (var i=0; i<constructors.length; i++) {
 
 // console.log(prototypes);
 // console.log(constructors);
-Object.getOwnPropertyNames(Promise).forEach(function(k) {
-	if (!/^(arguments|caller|length|name)$/.test(k))
-		AdoptingPromise[k] = Promise[k];
-});
-Promise = constructors[0].strict; // inherits from AdoptingPromise
+var Promise = constructors[0].strict; // inherits from AdoptingPromise
+AdoptingPromise.default = Promise;
+Promise.ES6 = ES6Promise;
+
+if (typeof module == "object" && module.exports)
+	module.exports = Promise;

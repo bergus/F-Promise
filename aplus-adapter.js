@@ -1,17 +1,16 @@
-var Promise = require("./Promise.js");
-exports.resolved = function(v) {
-	if (v instanceof Promise || v && {}.hasOwnProperty.call(v, "then")) console.warn("This would not make you lucky if it was Promise.of");
-	return Promise.resolve(v);
-};
+if (!Object.setPrototypeOf)
+	Object.setPrototypeOf = function(o, p) { o.__proto__ = p; return o; };
+var Promise = require("./variants.js");
+
+exports.resolved = Promise.resolve;
 exports.rejected = Promise.reject;
 exports.deferred = function() {
 	var d = {};
-	d.promise = new Promise(function(fulfill, reject) {
-		d.resolve = function(v) {
-			if (v instanceof Promise || v && {}.hasOwnProperty.call(v, "then")) console.warn("Don't call deferred.resolve() with a promise when it might do a fulfill()");
-			fulfill.async(v);
-		};
-		d.reject = reject.async;
-	}).chain(Promise.from); // make .fulfill() a .resolve()
+	d.promise = Promise.ES6(function(resolve, reject) {
+		d.resolve = resolve;
+		d.reject = reject;
+	});
 	return d;
 };
+
+console.warn = function ignore(){};
