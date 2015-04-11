@@ -106,7 +106,7 @@ function AdoptingPromise(fn) {
 			handle = subscription;
 		else if (handle.resolution && handle.resolution != that) { // expected to never happen
 			var cont = handle.resolution.fork(subscription);
-			if (this instanceof Promise && this.fork == forkAdopting) {
+			if (this instanceof AdoptingPromise && this.fork == forkAdopting) {
 				this.fork = handle.resolution.fork; // employ shortcut, empower garbage collection
 				this.onsend = handle.resolution.onsend;
 			}
@@ -126,10 +126,16 @@ function AdoptingPromise(fn) {
 		// TODO: don't let advanveSubscription have access to handlers, resolution etc.
 		return function advanceSubscription() { // but don't request execution until the continuation has been called - implicit lazyness
 			if (subscription) {
-				if (typeof subscription.lazy == "function")
-					return subscription.lazy; // TODO: set subscription to null?
-				else if (subscription.resolution)
-					return subscription.lazy = subscription.resolution.fork(subscription); // TODO: Does it matter when fork() doesn't return a continuation?
+				console.assert(subscription.lazy != advanceSubscription); // would end up very badly.
+				// if (typeof subscription.lazy == "function") return subscription.lazy; // TODO: set subscription to null?
+				// else
+				var r = subscription.resolution;
+				if (r && r != that && r.fork != forkAdopting) {
+					var cont = r.fork(subscription);
+					// subscription.lazy = r.fork() … ??? // TODO: Does it matter when fork() doesn't return a continuation?
+					subscription = null;
+					return cont; // TODO: return this continuation from further advanceSubscription calls?
+				}
 				// else
 				subscription.lazy = false;
 				subscription = null;
@@ -148,6 +154,8 @@ function AdoptingPromise(fn) {
 		
 		if (r == that) // A+ 2.3.1: "If promise and x refer to the same object," (instead of throwing)
 			r = Promise.reject(new TypeError("Promise|adopt: not going to assimilate itself")); // "reject promise with a TypeError as the reason"
+		else if (r.fork == that.fork)
+			r = Promise.reject(new TypeError("Promise|adopt: not going to assimilate an equivalent promise"));
 		handle.resolution = r;
 		that.fork = r.fork; // shortcut unnecessary calls, collect garbage methods
 		that.onsend = r.onsend;
@@ -368,11 +376,7 @@ Promise.prototype.cancellable = function(onCancel) {
 					cont
 				]).get();
 		};
-		return promise.fork({
-			proceed: adopt,
-			progress: progress,
-			token: token
-		});
+		return promise.fork({proceed: adopt, progress: progress, token: token});
 	});
 };
 Promise.prototype.uncancellable = function(onCancelAttempt) {
@@ -386,11 +390,7 @@ Promise.prototype.uncancellable = function(onCancelAttempt) {
 				onCancelAttempt(error);
 			// return undefined - does not reject anything, does not propagate cancellation.
 		};
-		return promise.fork({
-			proceed: adopt,
-			progress: progress,
-			token: {isCancelled: false}
-		});
+		return promise.fork({proceed: adopt, progress: progress, token: {isCancelled: false}});
 	});
 }
 Promise.prototype.finally = function(finalisation) {
@@ -400,24 +400,28 @@ Promise.prototype.finally = function(finalisation) {
 	return new AdoptingPromise(function finalisationResolver(adopt, progress, isCancellable) {
 		var token = {isCancelled: false};
 		this.onsend = function mapSend(msg, error) {
+			if (!promise) return;
 			if (msg != "cancel") return promise.onsend;
 			if (isCancellable(token))
 				var cont2 = adopt(Promise.reject(error)),
 				    cont1 = Promise.trigger(promise.onsend, arguments);
 				try {
-					finalisation(promise);
+					finalisation(promise); // ignores the possibly returned promise. TODO???
 				} finally {
 					return new ContinuationBuilder([cont1, cont2]).get();
 				}
 		};
+		var fin = Promise.method(finalisation);
 		return promise.fork({
 			proceed: function(p) {
-				var cont = adopt(p);
-				try {
-					finalisation(promise)
-				} finally {
-					return cont;
-				}
+				p = promise; // shouldn't matter
+				promise = null; // prevent cancellations
+				return fin(p).fork({
+					proceed: function() { // await the finalisation
+						return adopt(p);
+					},
+					progress: progress
+				});
 			},
 			progress: progress,
 			token: token
@@ -496,9 +500,9 @@ function makeChaining(execute) {
 					if (cancellation) // the fn() call did cancel us:
 						return Promise.trigger(promise.onsend, ["cancel", cancellation]); // revenge!
 					else if (strict)
-						return promise.fork({proceed: adopt, progress: progress, token: token});
+						return adopt(promise);
 					else
-						done = promise.fork({proceed: adopt, progress: progress, token: token});
+						done = adopt(promise);
 				};
 			}
 			var go = execute(promise.fork({
@@ -531,7 +535,7 @@ Promise.method = function makeThenHandler(fn, warn) {
 		// get a value from the fn, and apply https://github.com/promises-aplus/promises-spec#the-promise-resolution-procedure
 		try {
 			var v = fn.apply(this, arguments);
-			if (v instanceof Promise) return v; // A+ 2.3.2 "If x is a promise, adopt its state"
+			if (v instanceof AdoptingPromise) return v; // A+ 2.3.2 "If x is a promise, adopt its state"
 			// if (v === undefined) console.warn("Promise::then: callback did not return a result value")
 			if (Object(v) !== v) return Promise.of(v); // A+ 2.3.4 "If x is not an object or function, fulfill promise with x."
 			var then = v.then; // A+ 2.3.3.1 (Note: "avoid multiple accesses to the .then property")
@@ -556,7 +560,7 @@ Promise.from = Promise.cast = Promise.method(function identity(v) { return v; })
 
 // like Promise.cast/from, but always returns a new promise
 Promise.resolve = Promise.method(function getResolveValue(v) {
-	if (v instanceof Promise) return v.chain(); // a new Promise (assimilating v)
+	if (v instanceof AdoptingPromise) return v.chain(); // a new Promise (assimilating v)
 	return v;
 });
 
@@ -665,9 +669,10 @@ Promise.all = function all(promises, opt) {
 		this.onsend = function allSend(msg, error) {
 			if (msg != "cancel")
 				return notifyRest(arguments).get();
-			else if (isCancellable(token))
+			else if (isCancellable(token)) {
 				var cont = adopt(Promise.reject(error));
 				return notifyRest(arguments).add(cont).get();
+			}
 		};
 		return new ContinuationBuilder(promises.map(function(promise, i) {
 			return promise.fork({
@@ -713,9 +718,10 @@ Promise.race = function(promises) {
 		this.onsend = function raceSend(msg, error) {
 			if (msg != "cancel")
 				return notifyRest(-1, arguments).get();
-			else if (isCancellable(token))
+			else if (isCancellable(token)) {
 				var cont = adopt(Promise.reject(error));
 				return notifyRest(-1, arguments).add(cont).get();
+			}
 		};
 		return new ContinuationBuilder(promises.map(function(promise, i) {
 			return promise.fork({
