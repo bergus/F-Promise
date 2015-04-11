@@ -18,13 +18,12 @@ function makeResolvedPromiseConstructor(state, removable) {
 				} else if (subscription.proceed) {
 					var cont = subscription.proceed(that);
 					if (cont != runHandlers) continuations.add();
-				} else if (subscription.instruct) {
+				} else if (subscription.instruct && subscription.instruct.length) { // Array.isArray(subscription.instruct)
 					for (var i=0; i<subscription.instruct.length; i++) {
 						var sub = subscription.instruct[i];
-						if (sub.lazy !== false) { // filter out lazy handlers
-							sub.lazy = true;
+						if (!sub.instruct) // filter out lazy handlers
 							sub.resolution = that;
-						} else
+						else
 							handlers.push(sub);
 					}
 					subscription.instruct = null;
@@ -50,7 +49,7 @@ function makeResolvedPromiseConstructor(state, removable) {
 				};
 			} else if (typeof subscription.proceed == "function") {
 				return subscription.proceed(that); // TODO should not execute immediately?
-			} else if (subscription.instruct && subscription.instruct.length) {
+			} else if (subscription.instruct && subscription.instruct.length) { // Array.isArray(subscription.instruct)
 				var j = 0;
 				if (!handlers)
 					handlers = subscription.instruct;
@@ -58,18 +57,17 @@ function makeResolvedPromiseConstructor(state, removable) {
 					j = handlers.length;
 				for (var i=0; i<subscription.instruct.length; i++) {
 					var sub = subscription.instruct[i];
-					if (sub.lazy !== false) { // filter out lazy handlers
-						sub.lazy = true;
+					// TODO? remove progress/removable from handlers right now
+					if (!sub.instruct) // filter out lazy handlers
 						sub.resolution = that;
-					//} else if (handlers == subscription.instruct) {
+					//else if (handlers == subscription.instruct) {
 					//	if (j++ != i)
 					//		handlers[j] = sub;
-					} else
+					else
 						handlers[j++] = sub;
 				}
 				handlers.length = j;
 				subscription.instruct = null;
-				// TODO? remove progress/removable from handlers right now
 				return runHandlers;
 			}
 		};
@@ -112,7 +110,7 @@ function AdoptingPromise(fn) {
 			}
 			return cont;
 		} else {
-			if (!handle.instruct) {
+			if (!handle.instruct || !handle.instruct.length) {
 				if (handle.proceed || handle.success || handle.error)
 					handle = {token: null, instruct: [handle], resolution: null};
 				else
@@ -121,26 +119,20 @@ function AdoptingPromise(fn) {
 			}
 			handle.instruct.push(subscription);
 		}
-		if (subscription.lazy === false || subscription.instruct)
+		if (subscription.instruct)
 			return go;
-		// TODO: don't let advanveSubscription have access to handlers, resolution etc.
+		var cont;
+		// TODO: don't let advanveSubscription have access to handle etc.
 		return function advanceSubscription() { // but don't request execution until the continuation has been called - implicit lazyness
-			if (subscription) {
-				console.assert(subscription.lazy != advanceSubscription); // would end up very badly.
-				// if (typeof subscription.lazy == "function") return subscription.lazy; // TODO: set subscription to null?
-				// else
-				var r = subscription.resolution;
-				if (r && r != that && r.fork != forkAdopting) {
-					var cont = r.fork(subscription);
-					// subscription.lazy = r.fork() … ??? // TODO: Does it matter when fork() doesn't return a continuation?
-					subscription = null;
-					return cont; // TODO: return this continuation from further advanceSubscription calls?
-				}
-				// else
-				subscription.lazy = false;
-				subscription = null;
-			} // else throw new Error("unsafe continuation");
-			return go;
+			if (cont) return cont;
+			if (!subscription) return go;
+			var r = subscription.resolution;
+			if (r && r != that && r.fork != forkAdopting)
+				cont = r.fork(subscription);
+			else
+				subscription.instruct = true;
+			subscription = null;
+			return cont || go;
 		}
 	};
 	function adopt(r) {
@@ -149,7 +141,7 @@ function AdoptingPromise(fn) {
 	// creates an empty instruction handle if necessary
 	// forwards the handle (if not a still lazy subscription)
 		if (!handle)
-			handle = {token: null, instruct: null, resolution: r};
+			handle = {token: null, instruct: true, resolution: r};
 		else if (handle.resolution && handle.resolution != that) return; // throw new Error("cannot adopt different promises");
 		
 		if (r == that) // A+ 2.3.1: "If promise and x refer to the same object," (instead of throwing)
@@ -161,7 +153,7 @@ function AdoptingPromise(fn) {
 		that.onsend = r.onsend;
 		
 		go = null; // the aim of go continuation was to advance the resolution process until it provided us a promise to adopt
-		if (!handle.instruct && handle.lazy !== false)
+		if (!handle.instruct)
 			return;
 		// from now on, fork calls will return the continuation that advances the adopted promise to eventual resolution // TODO: do we need that at all?
 		return go = r.fork(handle);
@@ -169,7 +161,7 @@ function AdoptingPromise(fn) {
 	// expects `go` to be safe. TODO: Prove correctness. If wrapper is required, possibly unwrap when adopt() is called.
 	var go = fn.call(this, adopt, function progress(event) {
 		if (!handle) return;
-		if (!handle.instruct) return !isCancelled(handle.token) && handle.progress;
+		if (!handle.instruct || !handle.instruct.length) return !isCancelled(handle.token) && handle.progress;
 		var progressHandlers = handle.instruct.filter(function(subscription) { return subscription.progress && !isCancelled(subscription.token); });
 		if (progressHandlers.length == 1) return progressHandlers[0].progress;
 		var conts = new ContinuationBuilder();
