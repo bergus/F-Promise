@@ -182,12 +182,20 @@ function AdoptingPromise(fn) {
 FulfilledPromise.prototype = RejectedPromise.prototype = AdoptingPromise.prototype;
 var Promise = AdoptingPromise;
 
-Promise.prototype.create = function createAdopt(fn) {
-// instantiates a new Promise object of the same subclass as the current instance,
-// using the AdoptingPromise constructor
+Promise.prototype.create = function create(constructor, arg) {
+// instantiates a new Promise object of the same subclass as the current instance
+// using the supplied super constructor
 	// TODO: optimisation
 	var o = Object.create(Object.getPrototypeOf(this));
-	AdoptingPromise.call(o, fn);
+	constructor.call(o, arg);
+	return o;
+};
+Promise.create = function create(constructor, arg) {
+// instantiates a new Promise object of the current subclass
+// using the supplied super constructor
+	// TODO: optimisation
+	var o = Object.create(this.prototype);
+	constructor.call(o, arg);
 	return o;
 };
 
@@ -340,7 +348,7 @@ Promise.prototype.cancellable = function(onCancel) {
 	// returns new promise, registers instruct token
 	if (typeof onCancel != "function") console.warn("Promise::cancellable: you must pass a callback function, instead of "+typeof onCancel);
 	var promise = this;
-	return this.create(function cancellableResolver(adopt, progress, isCancellable) {
+	return this.create(AdoptingPromise, function cancellableResolver(adopt, progress, isCancellable) {
 		var token = {isCancelled: false};
 		this.onsend = function mapSend(msg, error) {
 			if (msg != "cancel") return promise.onsend;
@@ -358,7 +366,7 @@ Promise.prototype.cancellable = function(onCancel) {
 Promise.prototype.uncancellable = function(onCancelAttempt) {
 	// returns new promise, registers instruct token
 	var promise = this;
-	return this.create(function uncancellableResolver(adopt, progress, isCancellable) {
+	return this.create(AdoptingPromise, function uncancellableResolver(adopt, progress, isCancellable) {
 		this.onsend = function mapSend(msg, error) {
 			if (msg != "cancel") return promise.onsend;
 			// isCancellable({}) TODO: remove cancelled handlers
@@ -373,7 +381,7 @@ Promise.prototype.finally = function(finalisation) {
 	// returns new promise, registers instruct token
 	if (typeof finalisation != "function") console.warn("Promise::finally: you must pass a callback function, instead of "+typeof onCancel);
 	var promise = this;
-	return this.create(function finalisationResolver(adopt, progress, isCancellable) {
+	return this.create(AdoptingPromise, function finalisationResolver(adopt, progress, isCancellable) {
 		var token = {isCancelled: false};
 		this.onsend = function mapSend(msg, error) {
 			if (!promise) return;
@@ -419,7 +427,7 @@ function makeUnitFunction(constructor) {
 				for (var i=0; i<arguments.length; i++)
 					args[i] = arguments[i];
 		}
-		return new constructor(args);
+		return this.create(constructor, args);
 	};
 }
 Promise.of = Promise.fulfill = makeUnitFunction(FulfilledPromise);
@@ -428,7 +436,7 @@ Promise.reject = makeUnitFunction(RejectedPromise);
 function makeMapping(createSubscription, build) {
 	return function map(fn) {
 		var promise = this;
-		return this.create(function mapResolver(adopt, progress, isCancellable) { // TODO: respect subclass settings
+		return this.create(AdoptingPromise, function mapResolver(adopt, progress, isCancellable) { // TODO: respect subclass settings
 			var token = {isCancelled: false};
 			this.onsend = function mapSend(msg, error) {
 				if (msg != "cancel") return promise.onsend;
@@ -448,13 +456,13 @@ function makeMapping(createSubscription, build) {
 		});
 	};
 }
-Promise.prototype.map      = makeMapping(function(m, s) { s.success = m; return s; }, Promise.of); // Object.set("success")
-Promise.prototype.mapError = makeMapping(function(m, s) { s.error   = m; return s; }, Promise.reject); // Object.set("error")
+Promise.prototype.map      = makeMapping(function(m, s) { s.success = m; return s; }, Promise.of.bind(Promise)); // Object.set("success")
+Promise.prototype.mapError = makeMapping(function(m, s) { s.error   = m; return s; }, Promise.reject.bind(Promise)); // Object.set("error")
 
 function makeChaining(execute) {
 	return function chain(onfulfilled, onrejected, explicitToken) {
 		var promise = this;
-		return this.create(function chainResolver(adopt, progress, isCancellable) { // TODO: respect subclass settings
+		return this.create(AdoptingPromise, function chainResolver(adopt, progress, isCancellable) { // TODO: respect subclass settings
 			var cancellation = null,
 			    token = explicitToken || {isCancelled: false},
 			    strict = false, done;
@@ -533,9 +541,11 @@ Promise.method = function makeThenHandler(fn, warn) {
 };
 
 // wraps non-promises, adopts thenables (recursively), returns passed Promises directly
+// TODO: subclassing
 Promise.from = Promise.cast = Promise.method(function identity(v) { return v; }); // Function.identity
 
 // like Promise.cast/from, but always returns a new promise
+// TODO: subclassing
 Promise.resolve = Promise.method(function getResolveValue(v) {
 	if (v instanceof Promise) return v.chain(); // a new Promise (assimilating v)
 	return v;
@@ -630,7 +640,7 @@ Promise.all = function all(promises, opt) {
 	var spread = opt & 2 || (typeof opt == "function"),
 	    notranspose = opt & 1,
 	    joiner = (typeof opt == "function") && opt;
-	return this.prototype.create(function allResolver(adopt, progress, isCancellable) {
+	return this.create(AdoptingPromise, function allResolver(adopt, progress, isCancellable) {
 		var length = promises.length,
 		    cancellation = null,
 		    token = {isCancelled: false},
@@ -703,7 +713,7 @@ Promise.join = function(joiner) {
 };
 
 Promise.race = function(promises) {
-	return this.prototype.create(function raceResolver(adopt, progress, isCancellable) {
+	return this.create(AdoptingPromise, function raceResolver(adopt, progress, isCancellable) {
 		var token = {isCancelled: false};
 		function notifyExcept(i, args) {
 			var continuations = new ContinuationBuilder();
