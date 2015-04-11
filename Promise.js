@@ -646,15 +646,23 @@ Promise.all = function all(promises, opt) {
 		promises = Array.prototype.slice.call(arguments);
 		opt = 2;
 	}
-	var spread = opt & 2,
-	    notranspose = opt & 1;
+	var spread = opt & 2 || (typeof opt == "function"),
+	    notranspose = opt & 1,
+	    joiner = (typeof opt == "function") && opt;
 	return new AdoptingPromise(function allResolver(adopt, progress, isCancellable) {
 		var length = promises.length,
+		    cancellation = null,
 		    token = {isCancelled: false},
 		    left = length,
 		    results = [new Array(length)],
 		    waiting = new Array(length),
 		    width = 1;
+		function chainer() { // if joiner
+			var p = joiner.apply(null, results[0])
+			if (cancellation) // the joiner() call did cancel us:
+				return Promise.trigger(p.onsend, ["cancel", cancellation]); // revenge!
+			return adopt(p);
+		}
 		function notifyRest(args) {
 			var continuations = new ContinuationBuilder();
 			for (var j=0; j<length; j++)
@@ -665,9 +673,12 @@ Promise.all = function all(promises, opt) {
 		this.onsend = function allSend(msg, error) {
 			if (msg != "cancel")
 				return notifyRest(arguments).get();
-			else if (isCancellable(token))
+			else if (isCancellable(token)) {
+				if (!left) // there currently is no dependency, store for later
+					cancellation = error; // new CancellationError("aim already cancelled") ???
 				var cont = adopt(Promise.reject(error));
 				return notifyRest(arguments).add(cont).get();
+			}
 		};
 		return new ContinuationBuilder(promises.map(function(promise, i) {
 			return promise.fork({
@@ -685,7 +696,10 @@ Promise.all = function all(promises, opt) {
 							results[j][i] = arguments[j];
 					}
 					if (--left == 0)
-						return adopt(new FulfilledPromise(spread ? results[0] : results));
+						if (joiner)
+							return chainer;
+						else
+							return adopt(new FulfilledPromise(spread ? results[0] : results));
 				},
 				proceed: function(/*promise*/) {
 					waiting[i] = null;
@@ -698,6 +712,13 @@ Promise.all = function all(promises, opt) {
 			});
 		})).get();
 	});
+};
+Promise.join = function(joiner) {
+	var args = [], i = arguments.length;
+	joiner = arguments[--i];
+	while (i--)
+		args[i] = arguments[i];
+	return Promise.all(args, Promise.method(joiner));
 };
 
 Promise.race = function(promises) {
@@ -713,9 +734,10 @@ Promise.race = function(promises) {
 		this.onsend = function raceSend(msg, error) {
 			if (msg != "cancel")
 				return notifyRest(-1, arguments).get();
-			else if (isCancellable(token))
+			else if (isCancellable(token)) {
 				var cont = adopt(Promise.reject(error));
 				return notifyRest(-1, arguments).add(cont).get();
+			}
 		};
 		return new ContinuationBuilder(promises.map(function(promise, i) {
 			return promise.fork({
