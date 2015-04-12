@@ -31,7 +31,7 @@
 */
 
 // test snippet for cancellation:
-var a = Promise.defer(500, "hello").chain(function(x){console.log(x); return Promise.defer(500, "delays");}).map(console.log)
+var a = Promise.delay(500, "hello").chain(function(x){console.log(x); return Promise.delay(500, "delays");}).map(console.log)
 setTimeout(function(){ a.cancel(); }, 550)
 Promise.run(a.fork({error: function(e) { console.log(e.stacktrace);}}))
 

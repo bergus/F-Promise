@@ -602,22 +602,22 @@ Promise.prototype.timeout = function timeout(ms) {
 	return Promise.timeout(ms, this);
 };
 Promise.timeout = function timeout(ms, p) {
-	return Promise.race([p, Promise.defer(ms).chain(function() {
+	return Promise.race([p, Promise.delay(ms).chain(function() {
 		return Promise.reject(new Error("Timed out after "+ms+" ms"));
 	})]);
 };
-Promise.prototype.defer = function defer(ms) {
+Promise.prototype.delay = function delay(ms) {
 	// a fulfillment will be held up for ms
 	var promise = this;
-	return this.chain(function deferHandler() {
+	return this.chain(function delayHandler() {
 		// var promise = new FulfilledPromise(arguments);
-		return new AdoptingPromise(function deferResolver(adopt, _, isCancellable) {
+		return new AdoptingPromise(function delayResolver(adopt, _, isCancellable) {
 			var token = {isCancelled: false};
 			var timerId = setTimeout(function runDelayed() {
 				timerId = null;
 				Promise.run(adopt(promise));
 			}, ms);
-			this.onsend = function deferSend(msg, error) {
+			this.onsend = function delaySend(msg, error) {
 				// since promise is always already resolved, we don't need to resend
 				if (msg == "cancel" && isCancellable(token)) {
 					if (timerId != null)
@@ -628,8 +628,8 @@ Promise.prototype.defer = function defer(ms) {
 		});
 	});
 };
-Promise.defer = function defer(ms, v) {
-	return Promise.from(v).defer(ms);
+Promise.delay = function delay(ms, v) {
+	return Promise.from(v).delay(ms);
 };
 
 Promise.all = function all(promises, opt) {
