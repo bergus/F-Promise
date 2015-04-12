@@ -182,7 +182,10 @@ Promise.run(a.fork({error: function(e) { console.log(e.stacktrace);}}))
 * is disposable a comonad?
 * implement toJSON
 * a `.force()` method for lazy promises. Or `.execute()`? similar to `.done()`?
-* `.asap()` is considered bad enough not become a method, but require to be written out as `Promise.run(….fork({}))` 
+* `.asap()` is considered bad enough not become a method, but require to be written out as `Promise.run(….fork({}))`
+* ensure Promise.of (fantasyland) is not a method
+* Promise.sync might not do `Promise.run` from inside the constructor?
+* propDefault
 */
 
 /* SPEC: Communication
