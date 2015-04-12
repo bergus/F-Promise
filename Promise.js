@@ -711,6 +711,16 @@ Promise.join = function(joiner) {
 		args[i] = arguments[i];
 	return this.all(args, Promise.method(joiner));
 };
+Promise.lift = function(fn) {
+	var join = Promise.method(fn);
+	return function lifted(v) {
+		// if (arguments.length == 1) return v.then(fn) ???
+		var args = [v];
+		for (var i=1; i<arguments.length; i++)
+			args[i] = arguments[i];
+		return Promise.all(args, join);
+	};
+};
 
 Promise.race = function(promises) {
 	return this.create(AdoptingPromise, function raceResolver(adopt, progress, isCancellable) {
