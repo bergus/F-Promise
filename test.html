@@ -7,19 +7,13 @@
 		<meta name="description" content="Testing Scripts locally" />
 		<meta name="author" content="Bergi" />
 		
-		<script src="../Function.js"></script>
-		<script src="../Object.js"></script>
-		<script src="../Array.js"></script>
-		<script src="../String.js"></script>
-		<script src="../Number.js"></script>
-		
 		<script type="text/javascript" id="shim">
 			if (!this.setImmediate)
 				this.setImmediate = function setImmediate(fn) { return setTimeout(fn, 0); };
 			if (!this.clearImmediate)
 				this.clearImmediate = clearTimeout;
-			if (!Object.setPrototypeOf)
-				Object.setPrototypeOf = function(o, p) { o.__proto__ = p; return o; };
+			if (!Object.setPrototypeOf && Object.prototype.hasOwnProperty("__proto__"))
+				Object.setPrototypeOf = function setPrototypeOf(o, p) { o.__proto__ = p; return o; };
 		</script>
 		
 		<script src="Promise.js"></script>
