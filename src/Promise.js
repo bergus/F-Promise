@@ -640,6 +640,10 @@ Promise.all = function all(promises, opt) {
 	var spread = opt & 2 || (typeof opt == "function"),
 	    notranspose = opt & 1,
 	    joiner = (typeof opt == "function") && opt;
+	
+	if (!promises.length)
+		return joiner ? joiner() : Promise.of([]);
+	
 	return this.create(AdoptingPromise, function allResolver(adopt, progress, isCancellable) {
 		var length = promises.length,
 		    cancellation = null,
@@ -717,12 +721,14 @@ Promise.lift = function(fn) {
 		// if (arguments.length == 1) return v.then(fn) ???
 		var args = [v];
 		for (var i=1; i<arguments.length; i++)
-			args[i] = arguments[i];
-		return Promise.all(args, join);
+			args[i] = arguments[i]; // TODO: accept plain values?
+		return Promise.all(args, join.bind(this));
 	};
 };
 
 Promise.race = function(promises) {
+	//if (!promises.length)
+	//	return Promise.never;
 	return this.create(AdoptingPromise, function raceResolver(adopt, progress, isCancellable) {
 		var token = {isCancelled: false};
 		function notifyExcept(i, args) {

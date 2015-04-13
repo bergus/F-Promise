@@ -161,6 +161,7 @@ Promise.run(a.fork({error: function(e) { console.log(e.stacktrace);}}))
     - lazy (only if continued) / strict (ensures executing the callback) / strict+ (ensures evaluating to a value, including child promises)
     - safe (catch exceptions in all callbacks and reject the promises with them)
     - async (run everything detached) / asap (execute continuations immediately) - interesting for runners of lazy
+    - bound (to a context object) / plain (aplus-conform)
   - have methods to cast one into another (Object.create(other.prototype) and copying `fork` and `send`)
   - implement Functor, Monad, Applicative either as a mixin in any of these prototypes, or even let the common one inherit from Monad
   - Export the default (lazy+safe+async?) constructor, with static properties to get the other ones
