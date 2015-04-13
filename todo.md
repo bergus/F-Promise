@@ -186,6 +186,7 @@ Promise.run(a.fork({error: function(e) { console.log(e.stacktrace);}}))
 * ensure Promise.of (fantasyland) is not a method
 * Promise.sync might not do `Promise.run` from inside the constructor?
 * propDefault
+* remove `that` refences from constructors, instead use reference to `fork` method for identification - helps subclassing and copying
 */
 
 /* SPEC: Communication

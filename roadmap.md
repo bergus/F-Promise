@@ -29,7 +29,7 @@ Things to do:
  - links to promise introductions
  - why you should use this library
   - higly functional capabilities, algebraic
-  - rich features: lazyness, smart cancellation
+  - rich features: lazyness, smart cancellation, multivalues
   - easy debugging?
   - speed?
   - size? (ratio?)
