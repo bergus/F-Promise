@@ -1,9 +1,5 @@
-if (typeof module == "object" && module.exports) {
-	var AdoptingPromise = require("./Promise.js");
-	var ContinuationBuilder = AdoptingPromise.ContinuationBuilder,
-	    FulfilledPromise = AdoptingPromise.Fulfilled,
-	    RejectedPromise = AdoptingPromise.Rejected;
-}
+import {AdoptingPromise, ContinuationBuilder, FulfilledPromise, RejectedPromise} from "./Promise.js";
+
 function makePromiseConstructor(call, makeResolver) {
 	// makeResolver creates a fulfill/reject resolver with methods to actually execute the continuations they might return
 	function Promise(fn) {
@@ -149,5 +145,4 @@ var Promise = constructors[0].strict; // inherits from AdoptingPromise
 AdoptingPromise.default = Promise;
 Promise.ES6 = ES6Promise;
 
-if (typeof module == "object" && module.exports)
-	module.exports = Promise;
+export default Promise;

@@ -1,5 +1,3 @@
-"use strict";
-
 function makeResolvedPromiseConstructor(state, removable) {
 	return function ResolvedPromise(args) {
 		var that = this,
@@ -73,10 +71,10 @@ function makeResolvedPromiseConstructor(state, removable) {
 		};
 	}
 }
-var FulfilledPromise = makeResolvedPromiseConstructor("success", "error");
-var RejectedPromise =  makeResolvedPromiseConstructor("error", "success");
+export var FulfilledPromise = makeResolvedPromiseConstructor("success", "error");
+export var RejectedPromise =  makeResolvedPromiseConstructor("error", "success");
 	
-function AdoptingPromise(fn) {
+export function AdoptingPromise(fn) {
 // a promise that will at one point in the future adopt a given other promise
 // and from then on will behave identical to that adopted promise
 // since it is no more cancellable once resolved with a certain promise, that one is typically a settled one
@@ -225,7 +223,7 @@ Promise.trigger = function trigger(handler, args) {
 	return handler; // continuation, or whatever else it is
 };
 
-function ContinuationBuilder(continuations) {
+export function ContinuationBuilder(continuations) {
 	if (continuations) {
 		// filter out non-function values
 		for (var i=0, j=0; i<continuations.length; i++)
@@ -592,6 +590,7 @@ Promise.prototype.catch = function catch_(onrejected) {
 	} 
 };
 function isErrorClass(constructor) {
+	if (Error.isPrototypeOf(constructor)) return true; // ES6 subclassing (or, alternatively, anything that implements @@instanceOf)
 	if (constructor.prototype instanceof Error) return true; // premature optimisation
 	for (var p=constructor.prototype; p!=null; p=Object.getPrototypeOf(p))
 		if (Object.prototype.toString.call(p) == "[object Error]")
@@ -759,10 +758,3 @@ Promise.race = function(promises) {
 		}));
 	});
 };
-
-if (typeof module == "object" && module.exports) {
-	Promise.ContinuationBuilder = ContinuationBuilder;
-	Promise.Fulfilled = FulfilledPromise;
-	Promise.Rejected = RejectedPromise;
-	module.exports = Promise;
-}
