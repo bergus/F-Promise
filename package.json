@@ -13,7 +13,8 @@
 		"url": "http://github.com/bergus/F/issues"
 	},
 	"scripts": {
-		"test": "promises-aplus-tests tests/aplus-adapter.js"
+		"test": "promises-aplus-tests tests/aplus-adapter.js",
+		"build": "node build.js"
 	},
 	"main": "src/Promise.js",
 	"devDependencies": {

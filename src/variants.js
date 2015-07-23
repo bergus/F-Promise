@@ -1,4 +1,6 @@
-import {AdoptingPromise, ContinuationBuilder, FulfilledPromise, RejectedPromise} from "./Promise.js";
+import {AdoptingPromise, FulfilledPromise, RejectedPromise} from "base";
+import {ContinuationBuilder} from "continuations";
+import {} from "Promise";
 
 function makePromiseConstructor(call, makeResolver) {
 	// makeResolver creates a fulfill/reject resolver with methods to actually execute the continuations they might return
@@ -15,14 +17,14 @@ function makePromiseConstructor(call, makeResolver) {
 var config = {
 	sync: function makeSyncResolver(adopt, constructor) {
 		return function resolveSync() {
-			Promise.run(adopt(new constructor(arguments)));
+			AdoptingPromise.run(adopt(new constructor(arguments)));
 		};
 	},
 	async: function makeAsyncResolver(adopt, constructor) {
 		return function resolveAsync() {
 			var cont = adopt(new constructor(arguments)); // this creates the continuation immediately
 			setImmediate(function runAsyncResolution() {
-				Promise.run(cont);
+				AdoptingPromise.run(cont);
 			});
 		};
 	},
@@ -76,15 +78,12 @@ var config = {
 	}
 };
 
-// unlikely: continuations (AdoptingPromise, fork), asap (synchronous callbacks), promise-accepting resolvers (chain Promise.resolve)
+/* unlikely: continuations (AdoptingPromise, fork), asap (synchronous callbacks), promise-accepting resolvers (chain Promise.resolve)
 var ContinuationPromise = makePromiseConstructor(ContinuationBuilder.safe, function makeResolver(constructor) {
 	return function resolve() {
 		return adopt(new constructor(arguments));
 	};
-});
-function ES6Promise(fn) {
-	return new Promise.strict.async.safe.uncancellable(fn).chain(Promise.resolve); // TODO: lazy chain
-}
+}); */
 
 function makeCreator(proto) {
 	return function as() {
@@ -97,6 +96,9 @@ function makeCreator(proto) {
 function id() {
 	return this;
 }
+function makePrototype(safe, lazy) {
+	return Object.create(AdoptingPromise.prototype);
+}
 function makeConstructor(safe, lazy, async, cancellable) {
 	var caller = safe ? config.safe : config.unsafe;
 	if (cancellable)
@@ -105,44 +107,52 @@ function makeConstructor(safe, lazy, async, cancellable) {
 		caller = lazy ? config.lazy(caller) : config.strict(caller);
 	return makePromiseConstructor(caller, async ? config.async : config.sync);
 }
-var combinations = [["safe", "unsafe"], ["lazy", "strict"]],
+
+var characteristics = [["safe", "unsafe"], ["lazy", "strict"]],
     prototypes = [];
-for (var i=0, l=1<<combinations.length; i<l; i++)
-	prototypes.push(Object.create(AdoptingPromise.prototype));
+for (var i=0, l=1<<characteristics.length; i<l; i++)
+	prototypes.push(makePrototype(~i&1, ~i&2));
 for (var i=0; i<prototypes.length; i++) {
 	var p = prototypes[i],
 	    as = makeCreator(p);
-	for (var j=0; j<combinations.length; j++) {
-		var prop = combinations[j][i>>j & 1];
-		prototypes[i ^ 1<<j][prop] = as;
-		p["_"+combinations[j][0]] = !(i & 1<<j);
-		p[prop] = id;
+	for (var j=0; j<characteristics.length; j++) {
+		var prop = characteristics[j][i>>j & 1]; // get description for characteristic of this prototype
+		prototypes[i ^ 1<<j][prop] = as; // create converter on oppositional prototype
+		p[prop]                    = id; // create identity  on this prototype
+		p["_"+characteristics[j][0]] = !(i & 1<<j); // set feature for this characteristic
 	}
 }
 
-combinations.push(["async", "sync"], ["cancellable", "uncancellable"]); // constructors only
+characteristics.push(["async", "sync"], ["cancellable", "uncancellable"]); // constructors only
 var constructors = [];
-for (var i=0, l=1<<combinations.length; i<l; i++) {
-	var c = makeConstructor(~i&1, ~i&2, ~i&4, ~i&8);
-	constructors.push(c);
-	c.prototype = prototypes[i & 3];
-	if (i>>2 == 0)
-		c.prototype.constructor = c;
-}
+for (var i=0, l=1<<characteristics.length; i<l; i++)
+	constructors.push(makeConstructor(~i&1, ~i&2, ~i&4, ~i&8));
 for (var i=0; i<constructors.length; i++) {
 	var c = constructors[i];
-	for (var j=0; j<combinations.length; j++) {
-		var prop = combinations[j][i>>j & 1];
-		constructors[i ^ 1<<j][prop] = c;
-		c["_"+combinations[j][0]] = !(i & 1<<j);
-		c[prop] = c; // can't be bad if one can state a property explicitly
+	for (var j=0; j<characteristics.length; j++) {
+		var prop = characteristics[j][i>>j & 1]; // get description for characteristic of this constructor
+		constructors[i ^ 1<<j][prop] = c; // link from oppositional constructor
+		c["_"+characteristics[j][0]] = !(i & 1<<j); // set feature for this characteristic
+		c[prop] = c; // link from itself (can't be bad if one can state a characteristic explicitly)
 	}
 }
+
+// link each other - &3 is equivalent to %prototypes.length
+for (var i=0; i<constructors.length; i++)
+	constructors[i].prototype = prototypes[i & 3];
+for (var i=0; i<prototypes.length; i++)
+	prototypes[i & 3].constructor = constructors[i];
 
 // console.log(prototypes);
 // console.log(constructors);
-var Promise = constructors[0].strict; // inherits from AdoptingPromise
-AdoptingPromise.default = Promise;
-Promise.ES6 = ES6Promise;
+var DefaultPromise = AdoptingPromise.default = constructors[0].strict; // inherits from AdoptingPromise
 
-export default Promise;
+function ES6Promise(fn) {
+	return new DefaultPromise.strict.safe.async.uncancellable(fn).chain(DefaultPromise.resolve); // TODO: lazy chain
+}
+ES6Promise.prototype = DefaultPromise.prototype;
+Object.setPrototypeOf(ES6Promise, AdoptingPromise);
+DefaultPromise.ES6 = ES6Promise; // or on AdoptingPromise???
+
+
+export default DefaultPromise;
