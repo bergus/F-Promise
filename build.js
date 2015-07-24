@@ -5,7 +5,7 @@ function compile(name, create) {
 	console.log("bundling")
 	esperanto.bundle({
 		base: 'src',
-		entry: 'variants.js'
+		entry: 'Promise.js'
 	}).then(function (bundle) {
 		fs.writeFileSync('js/'+name, create(bundle));
 		console.log("written "+name);

@@ -1,178 +1,10 @@
 import {CommonPrototype, AdoptingPromise as Promise, FulfilledPromise, RejectedPromise} from "base";
-import {isCancelled} from "cancellation";
+import {DefaultPromise} from "variants";
+import {isCancelled, CancellationError} from "cancellation";
 import {ContinuationBuilder} from "continuations";
+import "aplus";
+export default DefaultPromise;
 
-CommonPrototype.create = function create(constructor, arg) {
-// instantiates a new Promise object of the same subclass as the current instance
-// using the supplied super constructor
-	// TODO: optimisation
-	var p = Object.getPrototypeOf(this);
-//	if (p == CommonPrototype)
-//		console.warn("The abstract base class should not be instantiated except for internal purposes") & console.trace();
-	var o = Object.create(p);
-	constructor.call(o, arg);
-	return o;
-};
-Promise.create = function create(constructor, arg) {
-// instantiates a new Promise object of the current subclass
-// using the supplied super constructor
-	// TODO: optimisation
-//	if (this.prototype == CommonPrototype)
-//		console.warn("The abstract base class should not be instantiated except for internal purposes") & console.trace();
-	var o = Object.create(this.prototype);
-	constructor.call(o, arg);
-	return o;
-};
-
-
-function makeUnitFunction(constructor) {
-	return function unit(val) {
-		// return new constructor(arguments);
-		// optimisable in V8 - http://jsperf.com/array-with-and-without-length/
-		var args = [];
-		switch (arguments.length) {
-			case 3: args[2] = arguments[2];
-			case 2: args[1] = arguments[1];
-			case 1: args[0] = val;
-			case 0: break;
-			default:
-				for (var i=0; i<arguments.length; i++)
-					args[i] = arguments[i];
-		}
-		return this.create(constructor, args);
-	};
-}
-
-Promise.of = Promise.fulfill = makeUnitFunction(FulfilledPromise);
-Promise.reject = makeUnitFunction(RejectedPromise);
-
-
-
-function makeMapping(createSubscription, build) {
-	return function map(fn) {
-		var promise = this;
-		return this.create(Promise, function mapResolver(adopt, progress, isCancellable) { // TODO: respect subclass settings
-			var token = {isCancelled: false};
-			this.onsend = function mapSend(msg, error) {
-				if (msg != "cancel") return promise.onsend;
-				if (isCancellable(token))
-					return new ContinuationBuilder([
-						adopt(Promise.reject(error)),
-						Promise.trigger(promise.onsend, arguments)
-					].reverse()).get();
-			};
-			return promise.fork(createSubscription(function mapper() {
-				return adopt(build(fn.apply(this, arguments)));
-			}, {
-				proceed: adopt,
-				progress: progress,
-				token: token
-			}));
-		});
-	};
-}
-Promise.prototype.map      = makeMapping(function(m, s) { s.success = m; return s; }, Promise.of.bind(Promise)); // Object.set("success")
-Promise.prototype.mapError = makeMapping(function(m, s) { s.error   = m; return s; }, Promise.reject.bind(Promise)); // Object.set("error")
-
-function makeChaining(execute) {
-	return function chain(onfulfilled, onrejected, explicitToken) {
-		var promise = this;
-		return this.create(Promise, function chainResolver(adopt, progress, isCancellable) { // TODO: respect subclass settings
-			var cancellation = null,
-			    token = explicitToken || {isCancelled: false},
-			    strict = false, done;
-			this.onsend = function chainSend(msg, error) {
-				if (msg != "cancel") return promise && promise.onsend;
-				if (explicitToken ? isCancelled(explicitToken) : isCancellable(token)) {
-					if (!promise) // there currently is no dependency, store for later
-						cancellation = error; // new CancellationError("aim already cancelled") ???
-					return new ContinuationBuilder([
-						adopt(Promise.reject(error)),
-						promise && Promise.trigger(promise.onsend, arguments)
-					].reverse()).get();
-				}
-			};
-			function makeChainer(fn) {
-				return function chainer() {
-					promise = null;
-					promise = fn.apply(undefined, arguments); // A+ 2.2.5 "must be called as functions (i.e. with no  this  value)"
-					if (cancellation) // the fn() call did cancel us:
-						return Promise.trigger(promise.onsend, ["cancel", cancellation]); // revenge!
-					else if (strict)
-						return adopt(promise);
-					else
-						done = adopt(promise);
-				};
-			}
-			var go = execute(promise.fork({
-				success: onfulfilled && makeChainer(onfulfilled),
-				error: onrejected && makeChainer(onrejected),
-				proceed: adopt,
-				progress: progress,
-				token: token
-			}));
-			return function advanceChain() { // TODO: prove correctness
-				if (done) // this was not called before asyncRun got executed, and strict was never set to true
-					return done;
-				strict = true;
-				return go;
-			}
-		});
-	};
-}
-Promise.prototype.chainStrict = makeChaining(Promise.runAsync);
-Promise.prototype.chain       = makeChaining(function(c){ return c; }); // Function.identity
-
-Promise.method = function makeThenHandler(fn, warn) {
-// returns a function that executes fn safely (catching thrown exceptions),
-// and applies the A+ promise resolution procedure on the result so that it always yields a promise
-	if (typeof fn != "function") {
-		if (warn && fn != null) console.warn(warn + ": You must pass a function callback or null, instead of", fn);
-		return null;
-	}
-	// var Promise = this; TODO subclassing???
-	return function thenableResolvingHandler() {
-		// get a value from the fn, and apply https://github.com/promises-aplus/promises-spec#the-promise-resolution-procedure
-		try {
-			var v = fn.apply(this, arguments);
-			if (v instanceof Promise) return v; // A+ 2.3.2 "If x is a promise, adopt its state"
-			// if (v === undefined) console.warn("Promise::then: callback did not return a result value")
-			if (Object(v) !== v) return Promise.of(v); // A+ 2.3.4 "If x is not an object or function, fulfill promise with x."
-			var then = v.then; // A+ 2.3.3.1 (Note: "avoid multiple accesses to the .then property")
-		} catch(e) {
-			return Promise.reject(e); // A+ 2.2.7.2, 2.3.3.2 "if […] throws an exception e, reject with e as the reason."
-		}
-		if (typeof then != "function") // A+ 2.3.3.4 "If then is not a function, fulfill promise with x"
-			return Promise.of(v);
-		return new Promise.default.unsafe.uncancellable(function thenableResolver(fulfill, reject, progress) {
-			try {
-				// A+ 2.3.3.3 "call then with x as this, first argument resolvePromise, and second argument rejectPromise"
-				then.call(v, fulfill, reject, progress); // TODO: support cancellation
-			} catch(e) { // A+ 2.3.3.3.4 "If calling then throws an exception e"
-				reject(e); // "reject promise with e as the reason (unless already resolved)"
-			}
-		}).chain(Promise.resolve); // A+ 2.3.3.3.1 "when resolvePromise is called with a value y, run [[Resolve]](promise, y)" (recursively)
-	};
-};
-
-// wraps non-promises, adopts thenables (recursively), returns passed Promises directly
-// TODO: subclassing
-Promise.from = Promise.cast = Promise.method(function identity(v) { return v; }); // Function.identity
-
-// like Promise.cast/from, but always returns a new promise
-// TODO: subclassing
-Promise.resolve = Promise.method(function getResolveValue(v) {
-	if (v instanceof Promise) return v.chain(); // a new Promise (assimilating v)
-	return v;
-});
-
-Promise.prototype.then = function then(onfulfilled, onrejected, onprogress, token) {
-	if (arguments.length > 0 && onfulfilled == null && onrejected == null && onprogress == null)
-		console.warn("Promise::then: You have passed no handler function");
-	if (onprogress)
-		this.fork({progress: function(event) { onprogress.apply(this, arguments); }, token: token}); // TODO: check consistency with progress spec
-	return this.chainStrict(Promise.method(onfulfilled, "Promise::then"), Promise.method(onrejected, "Promise::then"), token);
-};
 Promise.prototype.catch = function catch_(onrejected) {
 	if (typeof onrejected != "function") console.warn("Promise::catch: You must pass a function, instead of", onrejected);
 	if (arguments.length <= 1)
@@ -181,7 +13,7 @@ Promise.prototype.catch = function catch_(onrejected) {
 		var tohandle = onrejected,
 		    promise = this;
 		onrejected = arguments[1];
-		return this.chainStrict(null, Promise.method( isErrorClass(tohandle)
+		return this.chaineager(null, Promise.method( isErrorClass(tohandle)
 		  ?	function(err) {
 				if (err instanceof tohandle) return onrejected.call(this, arguments);
 				else return promise;
@@ -193,7 +25,7 @@ Promise.prototype.catch = function catch_(onrejected) {
 		));
 	} else {
 		var args = arguments;
-		return this.chainStrict(null, Promise.method(function(err) {
+		return this.chaineager(null, Promise.method(function(err) {
 			for (var i=0; i<args.length; ) {
 				var tohandle = args[i++];
 				if (i==args.length) // odd number of args, last is a catch-all
@@ -245,7 +77,7 @@ Promise.prototype.delay = function delay(ms) {
 	});
 };
 Promise.delay = function delay(ms, v) {
-	return Promise.from(v).delay(ms);
+	return this.from(v).delay(ms);
 };
 
 Promise.all = function all(promises, opt) {

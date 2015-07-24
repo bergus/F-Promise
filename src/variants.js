@@ -1,89 +1,7 @@
-import {AdoptingPromise, FulfilledPromise, RejectedPromise} from "base";
-import {ContinuationBuilder} from "continuations";
-import {} from "Promise";
+import makeConstructor from "constructors";
+import makePrototype from "prototypes";
+import {AdoptingPromise} from "base";
 
-function makePromiseConstructor(call, makeResolver) {
-	// makeResolver creates a fulfill/reject resolver with methods to actually execute the continuations they might return
-	function Promise(fn) {
-		AdoptingPromise.call(this, function callResolver(adopt, progress, isCancellable) {
-			return call(fn, this, makeResolver(adopt, FulfilledPromise), makeResolver(adopt, RejectedPromise), function triggerProgress() {
-				Promise.run(Promise.trigger(progress, arguments));
-			}, isCancellable);
-		});
-		fn = null; // garbage collection
-	}
-	return Object.setPrototypeOf(Promise, AdoptingPromise);
-}
-var config = {
-	sync: function makeSyncResolver(adopt, constructor) {
-		return function resolveSync() {
-			AdoptingPromise.run(adopt(new constructor(arguments)));
-		};
-	},
-	async: function makeAsyncResolver(adopt, constructor) {
-		return function resolveAsync() {
-			var cont = adopt(new constructor(arguments)); // this creates the continuation immediately
-			setImmediate(function runAsyncResolution() {
-				AdoptingPromise.run(cont);
-			});
-		};
-	},
-	unsafe: Function.call.bind(Function.call), // function unsafeCaller(fn, that, fulfill, reject, progress) { … }
-	safe: function safeCaller(fn, that, fulfill, reject, progress) {
-		try {
-			return fn.call(that, fulfill, reject, progress);
-		} catch(e) {
-			reject(e);
-		}
-	},
-	lazy: function(caller) {
-		return function lazyCaller(fn, that, fulfill, reject, progress, isCancellable) {
-			return ContinuationBuilder.safe(function lazyCall() { // a continuation
-				caller(fn, that, fulfill, reject, progress, isCancellable);
-			});
-		};
-	},
-	strict: function(caller) {
-		return function strictCall(fn, that, fulfill, reject, progress, isCancellable) {
-			caller(fn, that, fulfill, reject, progress);
-			// doesn't return the result
-		};
-	},
-	cancellable: function(caller, token) {
-		return function(fn, that, fulfill, reject, progress, isCancellable) {
-			var cancel = caller(fn, that, fulfill, reject, progress);
-			if (typeof cancel != "function") return;
-			that.onsend = function send(msg, error) {
-				if (msg != "cancel" || !isCancellable(token)) return;
-				try {
-					cancel(error);
-				} finally {
-					cancel = null;
-					reject(error); // return reject continuation???
-				}
-			};
-		};
-	},
-	lazyCancellable: function(caller) {
-		var token = {isCancelled:false};
-		caller = this.lazy(this.cancellable(caller, token));
-		return function(fn, that, fulfill, reject, progress, isCancellable) {
-			that.onsend = function send(msg, error) {
-				if (msg != "cancel" || !isCancellable(token)) return;
-				// the adopt call is expected to kill the waiting lazy continuation (buggy???)
-				reject(error); // return reject continuation???
-			};
-			return caller(fn, that, fulfill, reject, progress, isCancellable);
-		};
-	}
-};
-
-/* unlikely: continuations (AdoptingPromise, fork), asap (synchronous callbacks), promise-accepting resolvers (chain Promise.resolve)
-var ContinuationPromise = makePromiseConstructor(ContinuationBuilder.safe, function makeResolver(constructor) {
-	return function resolve() {
-		return adopt(new constructor(arguments));
-	};
-}); */
 
 function makeCreator(proto) {
 	return function as() {
@@ -96,20 +14,9 @@ function makeCreator(proto) {
 function id() {
 	return this;
 }
-function makePrototype(safe, lazy) {
-	return Object.create(AdoptingPromise.prototype);
-}
-function makeConstructor(safe, lazy, async, cancellable) {
-	var caller = safe ? config.safe : config.unsafe;
-	if (cancellable)
-		caller = lazy ? config.lazyCancellable(caller) : config.cancellable(caller, {isCancelled:false});
-	else
-		caller = lazy ? config.lazy(caller) : config.strict(caller);
-	return makePromiseConstructor(caller, async ? config.async : config.sync);
-}
 
-var characteristics = [["safe", "unsafe"], ["lazy", "strict"]],
-    prototypes = [];
+var characteristics = [["safe", "unsafe"], ["lazy", "eager"]];
+export var prototypes = [];
 for (var i=0, l=1<<characteristics.length; i<l; i++)
 	prototypes.push(makePrototype(~i&1, ~i&2));
 for (var i=0; i<prototypes.length; i++) {
@@ -124,7 +31,7 @@ for (var i=0; i<prototypes.length; i++) {
 }
 
 characteristics.push(["async", "sync"], ["cancellable", "uncancellable"]); // constructors only
-var constructors = [];
+export var constructors = [];
 for (var i=0, l=1<<characteristics.length; i<l; i++)
 	constructors.push(makeConstructor(~i&1, ~i&2, ~i&4, ~i&8));
 for (var i=0; i<constructors.length; i++) {
@@ -145,14 +52,14 @@ for (var i=0; i<prototypes.length; i++)
 
 // console.log(prototypes);
 // console.log(constructors);
-var DefaultPromise = AdoptingPromise.default = constructors[0].strict; // inherits from AdoptingPromise
+export var DefaultPromise = AdoptingPromise.default = constructors[0].safe.eager; // inherits from AdoptingPromise
+
+export var eagerUnsafeBichain = DefaultPromise.eager.unsafe.prototype.bichain;
+export var lazyUnsafeChain = DefaultPromise.lazy.unsafe.prototype.chain;
 
 function ES6Promise(fn) {
-	return new DefaultPromise.strict.safe.async.uncancellable(fn).chain(DefaultPromise.resolve); // TODO: lazy chain
+	return new DefaultPromise.safe.eager.async.uncancellable(fn).assimilate();
 }
 ES6Promise.prototype = DefaultPromise.prototype;
 Object.setPrototypeOf(ES6Promise, AdoptingPromise);
 DefaultPromise.ES6 = ES6Promise; // or on AdoptingPromise???
-
-
-export default DefaultPromise;

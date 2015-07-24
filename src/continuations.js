@@ -1,4 +1,4 @@
-import {AdoptingPromise as Promise} from './base.js';
+import {AdoptingPromise as Promise} from 'base';
 
 Promise.run = function run(cont) {
 	while (typeof cont == "function")

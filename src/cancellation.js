@@ -1,4 +1,4 @@
-import {CommonPrototype} from "base";
+import {CommonPrototype, AdoptingPromise} from "base";
 import {ContinuationBuilder, trigger} from "continuations";
 
 CommonPrototype.onsend = function noHandler(event) {};

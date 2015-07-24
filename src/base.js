@@ -77,7 +77,7 @@ function makeResolvedPromiseConstructor(state, removable) {
 export var FulfilledPromise = makeResolvedPromiseConstructor("success", "error");
 export var RejectedPromise =  makeResolvedPromiseConstructor("error", "success");
 
-function reject(message) {
+function rejectErr(message) {
 	return new RejectedPromise([new TypeError(message)]);
 }
 	
@@ -103,7 +103,7 @@ export function AdoptingPromise(fn) {
 	//      if there is an instruction handle, it adds the subscription on it
 	
 		if (subscription.proceed == adopt) // A+ 2.3.1: "If promise and x refer to the same object," (instead of throwing)
-			return adopt(reject("Promise/fork: not going to wait to assimilate itself")); // "reject promise with a TypeError as the reason"
+			return adopt(rejectErr("Promise/fork: not going to wait to assimilate itself")); // "reject promise with a TypeError as the reason"
 		
 		if (!handle)
 			handle = subscription;
@@ -119,7 +119,7 @@ export function AdoptingPromise(fn) {
 				if (handle.proceed || handle.success || handle.error)
 					handle = {token: null, instruct: [handle], resolution: null};
 				else
-					handle.instruct = [];
+					handle.instruct = []; // when does this happen???
 				Object.defineProperty(handle, "token", {get: makeArrayToken(handle.instruct), enumerable:true, configurable:true});
 			}
 			handle.instruct.push(subscription);
@@ -128,6 +128,7 @@ export function AdoptingPromise(fn) {
 			return go;
 		var cont;
 		// TODO: don't let advanveSubscription have access to handle etc.
+		// TODO: don't let the handle (which is held by living promises or resolvers) have access to the lazy subscriptions
 		return function advanceSubscription() { // but don't request execution until the continuation has been called - implicit lazyness
 			if (cont) return cont;
 			if (!subscription) return go;
@@ -135,7 +136,7 @@ export function AdoptingPromise(fn) {
 			if (r && r != that && r.fork != forkAdopting)
 				cont = r.fork(subscription);
 			else
-				subscription.instruct = true;
+				subscription.instruct = true; // move out of else???
 			subscription = null;
 			return cont || go;
 		}
@@ -150,9 +151,9 @@ export function AdoptingPromise(fn) {
 		else if (handle.resolution && handle.resolution != that) return; // throw new Error("cannot adopt different promises");
 		
 		if (r == that) // A+ 2.3.1: "If promise and x refer to the same object," (instead of throwing)
-			r = reject("Promise|adopt: not going to assimilate itself"); // "reject promise with a TypeError as the reason"
+			r = rejectErr("Promise|adopt: not going to assimilate itself"); // "reject promise with a TypeError as the reason"
 		else if (r.fork == that.fork)
-			r = reject("Promise|adopt: not going to assimilate an equivalent promise");
+			r = rejectErr("Promise|adopt: not going to assimilate an equivalent promise");
 		handle.resolution = r;
 		that.fork = r.fork; // shortcut unnecessary calls, collect garbage methods
 		that.onsend = r.onsend;
@@ -185,3 +186,8 @@ export function AdoptingPromise(fn) {
 }
 
 export var CommonPrototype = FulfilledPromise.prototype = RejectedPromise.prototype = AdoptingPromise.prototype;
+
+export function of(x) { return new FulfilledPromise([x]); }
+export function reject(err) { return new RejectedPromise([err]); }
+AdoptingPromise.of = of;
+AdoptingPromise.reject = reject;
